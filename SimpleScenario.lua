@@ -47,6 +47,18 @@ function addUnitsToAirbases(installations, unittype, unitname, dbid, loadoutid)
   end
 end
 
+function addUnitLatLong(side, lat, long, alt, heading)
+  loadoutIds={}
+  loadoutIds[0]=12283 
+  loadoutIdx = 0
+  dbId = 5214 -- Eurofighter
+  latStr = "".. lat
+  longStr = "" .. long
+  loadoutId = loadoutIds[loadoutIdx]
+  ScenEdit_AddUnit({type ='Air', unitname ='Eurofighter', loadoutid=loadoutId, dbid =dbId, side =side, Lat=lat,Lon=long,alt=alt, heading=heading}) 
+end
+
+
 
 function activateSensors(units)
   print("Activating Sensors")
@@ -57,6 +69,16 @@ function activateSensors(units)
           unitDetails.subtype=='5001') then
           -- print("Activating Sensor for " .. unitDetails.name)
           ScenEdit_SetEMCON('Unit',unitDetails.guid,'Radar=Active') 
+      end
+  end
+end
+
+
+function activateSensorsAircrafts(units)
+  for i,unit in ipairs(units) do
+      local unitDetails = VP_GetUnit( { guid = unit.guid } ) 
+      if unitDetails.type=='Aircraft' then
+        ScenEdit_SetEMCON('Unit',unitDetails.guid,'Radar=Active') 
       end
   end
 end
@@ -87,55 +109,293 @@ function launchAllAircrafts(units)
   end
 end
 
+function split (inputstr, sep)
+        if sep == nil then
+                sep = "%s"
+        end
+        local t={}
+        for str in string.gmatch(inputstr, "([^"..sep.."]+)") do
+                table.insert(t, str)
+        end
+        return t
+end
+
+function RandomPosition(latitudeMin,latitudeMax,longitudeMin,longitudeMax)
+	local lat_var = math.random(1,(10^13)) --random number between 1 and 10^13
+	local lon_var = math.random(1,(10^13)) --random number between 1 and 10^13
+	local pos_lat = math.random(latitudeMin,latitudeMax) + (lat_var/(10^13)) --latitude; 
+	local pos_lon = math.random(longitudeMin,longitudeMax) + (lon_var/(10^13)) --longitude; 
+	return {latitude=pos_lat,longitude=pos_lon}
+end
+
+function CreateCircleOfReferencePointsAroundPoint(point,side,numpoints,radius,prefix)
+	local rpTable = {}
+	local circle = World_GetCircleFromPoint({latitude=point.latitude,
+		longitude=point.longitude,
+		radius=radius,
+		numpoints=numpoints})
+	for k,v in ipairs (circle) do
+		local rp = ScenEdit_AddReferencePoint({side=side,
+			latitude=v.latitude,
+			longitude=v.longitude,
+			name=prefix..' '..k,
+			highlighted=true})
+		table.insert(rpTable,rp.guid)
+	end
+	return rpTable
+end
+
+function CreateCircleOfReferencePointsAroundUnit(unitGUID,numpoints,radius,prefix)
+	local unit = ScenEdit_GetUnit({guid=unitGUID})
+	local rpTable = {}
+	local circle = World_GetCircleFromPoint({latitude=unit.latitude,
+		longitude=unit.longitude,
+		radius=radius,
+		numpoints=numpoints})
+	for k,v in ipairs (circle) do
+		local rp = ScenEdit_AddReferencePoint({side=unit.side,
+			latitude=v.latitude,
+			longitude=v.longitude,
+			name=prefix..' '..k,
+			highlighted=true})
+		table.insert(rpTable,rp.guid)
+	end
+	return rpTable
+end
+
+function CreateCircleOfReferencePointsAroundRP(rpGUID,rpSide,numpoints,radius,prefix)
+	local unit = ScenEdit_GetReferencePoint({side=rpSide,guid=rpGUID})
+	local rpTable = {}
+	local circle = World_GetCircleFromPoint({latitude=unit.latitude,
+		longitude=unit.longitude,
+		radius=radius,
+		numpoints=numpoints})
+	for k,v in ipairs (circle) do
+		local rp = ScenEdit_AddReferencePoint({side=unit.side,
+			latitude=v.latitude,
+			longitude=v.longitude,
+			name=prefix..' '..k,
+			highlighted=true})
+		table.insert(rpTable,rp.guid)
+	end
+	return rpTable
+end
+
+function CircularRandomPositionMinMax(x_latitude, x_longitude, min_radius, max_radius)
+	local randomisationCircle = World_GetCircleFromPoint({
+		latitude=x_latitude,
+		longitude=x_longitude,
+		radius=math.random(min_radius,max_radius),
+		numpoints = 72})
+	local randomisedPoint = randomisationCircle[math.random(1,#randomisationCircle)]
+    return randomisedPoint
+end
+
+
+function CircularRandomPosition(x_latitude, x_longitude, max_radius)
+    return CircularRandomPositionMinMax(x_latitude, x_longitude, 0.1, max_radius)
+end
+
+
+
+function getID(xmlText)
+    local splitted = split(xmlText, '<')
+    for i, part in ipairs(splitted) do
+        if string.find(part, "ID>") and not string.find(part, "/") then
+            local splitted2 = split(part, ">")
+            if #splitted2>1 then
+                return splitted2[2]
+            end 
+        end
+    end
+    return ""
+end
+
+
+function getDescriptionName(xmlText)
+    local splitted = split(xmlText, '<')
+    for i, part in ipairs(splitted) do
+        if string.find(part, "Description>") and not string.find(part, "/") then
+            local splitted2 = split(part, ">")
+            if #splitted2>1 then
+                return splitted2[2]
+            end 
+        end
+    end
+    return ""
+end
+
+
+function addTrigger()
+    local triggers = ScenEdit_SetTrigger( { description='RuleBasedAITrigger', mode = 'list' } )
+
+
+    --print(triggers)
+    for i, trigger in ipairs(triggers['triggers']) do
+        local triggerName = getDescriptionName(trigger.xml)
+        if #triggerName>0 then
+            ScenEdit_SetTrigger({mode='remove',type='RegularTime', name=triggerName})
+            -- type=ScenLoaded
+            -- type=Time
+            -- UnitDetected
+        end
+    end
+
+
+    -- { triggers = { [1] = { xml = '<EventTrigger_RegularTime><ID>EC0Q1H-0HMRSB3P9Q855</ID><Description>RegularTime</Description><Interval>12</Interval></EventTrigger_RegularTime>', RegularTime = { ID = 'EC0Q1H-0HMRSB3P9Q855', Interval = '12', Description = 'RegularTime' } } } }
+     -- ScenEdit_SetTrigger({mode='remove',type='RegularTime', name='trigger'})
+
+     ScenEdit_SetTrigger({mode='add',type='RegularTime', name='RuleBasedAITrigger', interval = 12})
+     -- ScenEdit_SetTrigger({mode='add',type='UnitIsDetected', name='UnitDetectionTrigger'})
+
+end
+
+function addAction() 
+    print("Adding Actions")
+
+    scriptText="print('Hello World')\r\nEnemyAISimple(0)"
+
+    local actions = ScenEdit_SetAction( { mode = 'list', description='RuleBasedAIAction' } )
+    for i, action in ipairs(actions.actions) do
+        local actionDescription = getDescriptionName(action.xml)        
+        --print("ActionDescription is " .. actionDescription)
+        if #actionDescription>0 then
+            print("Removing..." .. actionDescription)
+            local action = ScenEdit_SetAction( { mode = 'remove', description=actionDescription } )
+        end
+    end
+
+   
+
+    local action = ScenEdit_SetAction( { mode = 'add', description='RuleBasedAIAction', type='LuaScript', ScriptText=scriptText } )
+
+    --print(action) -- list of action settings 
+end
+
+function addEvent()
+ ScenEdit_SetEvent('RuleBasedAIEvent',{mode = 'add', isActive='True', isShown='True', IsRepeatable='True', Probability=100}) 
+ ScenEdit_SetEventTrigger('RuleBasedAIEvent', {mode='add', name='RuleBasedAITrigger'})
+ ScenEdit_SetEventAction('RuleBasedAIEvent', {mode='add', name='RuleBasedAIAction'})
+
+end
+
+function removeEvents()
+    local u = ScenEdit_GetEvents( 4 ) 
+    for i, event in ipairs(u) do
+        print("Removing event "..event.description)
+        ScenEdit_SetEvent(event.description,{mode = 'remove'}) 
+    end
+end
+
+
 
 function setupSimple()
   addSides()
-  addNovernich('Friendly')
-  addWoodbridge('Enemy')
 
-  addEWSensorsGermany('Friendly')
+  -- addNovernich('Friendly')
+  -- addWoodbridge('Enemy')
+
+  -- addEWSensorsGermany('Friendly')
 
 
   local friendly = VP_GetSide( { Side ='Friendly' } ) 
   local enemy = VP_GetSide( { Side ='Enemy' } ) 
 
-  addUnitsToAirbases(friendly.units, 'Air', 'Eurofighter', 5214, 12283)
-  addUnitsToAirbases(enemy.units, 'Air', 'Eurofighter', 5214, 12283)
+  deleteAircrafts(friendly.units)
+  deleteAircrafts(enemy.units)
 
-  activateSensors(friendly.units)
-  launchAllAircrafts(friendly.units)
+
+  -- addUnitsToAirbases(friendly.units, 'Air', 'Eurofighter', 5214, 12283)
+  -- addUnitsToAirbases(enemy.units, 'Air', 'Eurofighter', 5214, 12283)
+
+  -- activateSensors(friendly.units)
+  -- launchAllAircrafts(friendly.units)
+
+
+  centroid = { latitude = 51, longitude = 7}
+    
+  for i=1,4 do
+    position = CircularRandomPosition(centroid.latitude,centroid.longitude,30)
+    heading = math.atan((position.longitude - centroid.longitude), (position.latitude - centroid.latitude)) * 180 / math.pi    
+    addUnitLatLong('Friendly', position.latitude, position.longitude, 10000, heading )
+  end
+
+  for i=1,4 do
+    position = CircularRandomPositionMinMax(centroid.latitude,centroid.longitude,30, 70)
+    heading = math.atan((centroid.longitude - position.longitude), (centroid.latitude - position.latitude)) * 180 / math.pi    
+    addUnitLatLong('Enemy', position.latitude, position.longitude, 10000, heading )
+  end
+
+
+  -- addUnitLatLong('Friendly', 51, 8, 10000, 0)
+  -- addUnitLatLong('Friendly', 51, 9, 10000, 0)
+  -- addUnitLatLong('Friendly', 51, 10, 10000, 0)
+  aircraftsFriendly = getAircrafts(friendly.units)
+
+
+  -- addUnitLatLong('Enemy', centroid.latitude, centroid.longitude, 10000, 0)
+  -- addUnitLatLong('Enemy', 51.5, 8, 10000, 180)
+  -- addUnitLatLong('Enemy', 51.5, 9, 10000, 180)
+  -- addUnitLatLong('Enemy', 51.5, 10, 10000, 180)
+  aircraftsEnemy = getAircrafts(enemy.units)
+
+  activateSensorsAircrafts(friendly.units)
+  activateSensorsAircrafts(enemy.units)
+
+  for i, unit in ipairs(aircraftsFriendly) do
+    -- setUnitCourse(unit, 51,7)
+    manualAttackContact(aircraftsFriendly[i].guid, aircraftsEnemy[i].guid, 12283, 1) 
+  end
+
+  removeEvents()
+
+  addAction()
+  addTrigger()
+  addEvent()
+
 end
 
 
 
 
-function setUnitCourse()
-  -- ScenEdit_SetUnit({{side = '{"+side+"}', name = '{}', course = {{".format(side, aircraft_name)
-  -- data += "{{longitude = '{}', latitude = '{}', TypeOf = 'ManualPlottedCourseWaypoint'}}".format(latitude, longitude)
-  -- data += "}})
+function setUnitCourse(unit, latitude, longitude)
+
+  ScenEdit_SetUnit({side=unit.side, 
+                   name=unit.guid, 
+                   course={{longitude=longitude, latitude=latitude}}, 
+                   TypeOf='ManualPlottedCourseWaypoint'})
+
 end
 
 function manualAttackContact(attacker_id, contact_id, weapon_id, qty, mount_id) --mount_id nil
-  -- if mount_id == nil then
-  --   ScenEdit_AttackContact({attacker_id}, {contact_id} ,{{mode='1', weapon={weapon_id}, qty={qty}}})
-  -- else:
-  --   ScenEdit_AttackContact({attacker_id}, {contact_id} ,{{mode='1', mount={mount_id}, weapon={weapon_id}, qty={qty}}})
-  -- end
+  if mount_id == nil then
+     ScenEdit_AttackContact(attacker_id, contact_id ,{mode='1', weapon=weapon_id, qty=qty})
+   else
+     ScenEdit_AttackContact(attacker_id, contact_id ,{mode='1', mount=mount_id, weapon=weapon_id, qty=qty})
+   end
 end
 
 function auto_attack_contact(attacker_id, contact_id)
-  -- ScenEdit_AttackContact({attacker_id}, {contact_id},{{mode='0'}})
+  ScenEdit_AttackContact(attacker_id, contact_id,{mode='0'})
 end
 
 function refuel_unit(side, unit_name, tanker_name)
-  -- ScenEdit_RefuelUnit({{side={side}, unitname={unit_name}, tanker={tanker_name}}})
+  ScenEdit_RefuelUnit({side=side, unitname=unit_name, tanker=tanker_name})
 end
 
 function auto_refuel(side, unit_name)
-  -- ScenEdit_RefuelUnit({{side={side}, unitname={unit_name}}})
+  ScenEdit_RefuelUnit({side=side, unitname=unit_name})
 end
 
+-- Define the enemy AI behavior
+function EnemyAISimple(time)
+    contact = ScenEdit_UnitC()
+    if not (contact==nil) then
+        printMessage("Contact spotted " .. contact.name)
+    end
+end
 
+ 
 -- Define the enemy AI behavior
 function EnemyAI(time)
   -- Get the current scenario and time
@@ -230,16 +490,6 @@ function deleteAllUnits()
 end
 
 
-function addUnitLatLong(side, lat, long, alt)
-  loadoutIds={}
-  loadoutIds[0]=12283 
-  loadoutIdx = 0
-  dbId = 5214 -- Eurofighter
-  latStr = "".. lat
-  longStr = "" .. long
-  loadoutId = loadoutIds[loadoutIdx]
-  ScenEdit_AddUnit({type ='Air', unitname ='Eurofighter', loadoutid=loadoutId, dbid =dbId, side =side, Lat=lat,Lon=long,alt=alt}) 
-end
 
 function addUnitToBase(side, base)
   loadoutIds={}
