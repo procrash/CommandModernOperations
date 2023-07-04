@@ -230,7 +230,21 @@ function addTrigger()
     local triggers = ScenEdit_SetTrigger( { description='RuleBasedAITrigger', mode = 'list' } )
 
 
-    --print(triggers)
+    -- print(triggers)
+    for i, trigger in ipairs(triggers['triggers']) do
+        local triggerName = getDescriptionName(trigger.xml)
+        if #triggerName>0 then
+            ScenEdit_SetTrigger({mode='remove',type='RegularTime', name=triggerName})
+            -- type=ScenLoaded
+            -- type=Time
+            -- UnitDetected
+        end
+    end
+
+    local triggers = ScenEdit_SetTrigger( { description='UnitDetectionTrigger', mode = 'list' } )
+
+    -- print(triggers)
+    -- print(triggers)
     for i, trigger in ipairs(triggers['triggers']) do
         local triggerName = getDescriptionName(trigger.xml)
         if #triggerName>0 then
@@ -245,15 +259,27 @@ function addTrigger()
     -- { triggers = { [1] = { xml = '<EventTrigger_RegularTime><ID>EC0Q1H-0HMRSB3P9Q855</ID><Description>RegularTime</Description><Interval>12</Interval></EventTrigger_RegularTime>', RegularTime = { ID = 'EC0Q1H-0HMRSB3P9Q855', Interval = '12', Description = 'RegularTime' } } } }
      -- ScenEdit_SetTrigger({mode='remove',type='RegularTime', name='trigger'})
 
+     -- { triggers = { [1] = { xml = '<EventTrigger_UnitDetected><ID>EC0Q1H-0HMRSHV4AOBE0</ID>
+     -- <Description>UnitDetectionTrigger</Description>
+     -- <TargetFilter><ID>EC0Q1H-0HMRSHV4AOBE1</ID>
+     -- <TargetType>0</TargetType><TargetSubType>0</TargetSubType></TargetFilter>
+     -- <Area />
+     --<DetectorSideID>EC0Q1H-0HMRSHV4AOAS1</DetectorSideID>
+     --<MCL>0</MCL></EventTrigger_UnitDetected>', UnitDetected = { Area = '', TargetFilter = { TargetSubType = '0', TargetType = '0', ID = 'EC0Q1H-0HMRSHV4AOBE1' }, MCL = '0', Description = 'UnitDetectionTrigger', DetectorSideID = 'EC0Q1H-0HMRSHV4AOAS1', ID = 'EC0Q1H-0HMRSHV4AOBE0' } } } }
+
+    local friendly = VP_GetSide( { Side ='Friendly' } ) 
+    local enemy = VP_GetSide( { Side ='Enemy' } ) 
+
      ScenEdit_SetTrigger({mode='add',type='RegularTime', name='RuleBasedAITrigger', interval = 12})
-     -- ScenEdit_SetTrigger({mode='add',type='UnitIsDetected', name='UnitDetectionTrigger'})
+     ScenEdit_SetTrigger({mode='add',type='UnitDetected', name='UnitDetectionTriggerEnemy', detectorSideID=friendly.guid})
+     ScenEdit_SetTrigger({mode='add',type='UnitDetected', name='UnitDetectionTriggerFriendly', detectorSideID=enemy.guid})
 
 end
 
 function addAction() 
     print("Adding Actions")
 
-    scriptText="print('Hello World')\r\nEnemyAISimple(0)"
+    scriptText="EnemyAISimple(0)"
 
     local actions = ScenEdit_SetAction( { mode = 'list', description='RuleBasedAIAction' } )
     for i, action in ipairs(actions.actions) do
@@ -275,6 +301,8 @@ end
 function addEvent()
  ScenEdit_SetEvent('RuleBasedAIEvent',{mode = 'add', isActive='True', isShown='True', IsRepeatable='True', Probability=100}) 
  ScenEdit_SetEventTrigger('RuleBasedAIEvent', {mode='add', name='RuleBasedAITrigger'})
+ ScenEdit_SetEventTrigger('RuleBasedAIEvent', {mode='add', name='UnitDetectionTriggerFriendly'})
+ ScenEdit_SetEventTrigger('RuleBasedAIEvent', {mode='add', name='UnitDetectionTriggerEnemy'})
  ScenEdit_SetEventAction('RuleBasedAIEvent', {mode='add', name='RuleBasedAIAction'})
 
 end
@@ -282,8 +310,11 @@ end
 function removeEvents()
     local u = ScenEdit_GetEvents( 4 ) 
     for i, event in ipairs(u) do
+        if not (event.description==nil) then
         print("Removing event "..event.description)
         ScenEdit_SetEvent(event.description,{mode = 'remove'}) 
+        end
+
     end
 end
 
@@ -332,6 +363,11 @@ function setupSimple()
   -- addUnitLatLong('Friendly', 51, 10, 10000, 0)
   aircraftsFriendly = getAircrafts(friendly.units)
 
+  -- printMessage("Friendly units are:")
+  -- for i, ac in ipairs(aircraftsFriendly) do 
+  --   printMessage(ac.guid)
+  -- end
+
 
   -- addUnitLatLong('Enemy', centroid.latitude, centroid.longitude, 10000, 0)
   -- addUnitLatLong('Enemy', 51.5, 8, 10000, 180)
@@ -359,12 +395,10 @@ end
 
 
 function setUnitCourse(unit, latitude, longitude)
-
   ScenEdit_SetUnit({side=unit.side, 
                    name=unit.guid, 
                    course={{longitude=longitude, latitude=latitude}}, 
                    TypeOf='ManualPlottedCourseWaypoint'})
-
 end
 
 function manualAttackContact(attacker_id, contact_id, weapon_id, qty, mount_id) --mount_id nil
@@ -387,12 +421,92 @@ function auto_refuel(side, unit_name)
   ScenEdit_RefuelUnit({side=side, unitname=unit_name})
 end
 
+-- ----------------------------------------
+-- Global Variables for Rule Based Opponent
+-- ----------------------------------------
+
+if not spottedContacts then
+    spottedContacts = {}
+end
+
+spottedContactsIdx = 1
+
+if not engagementsList then
+    engagementsList = {}
+end
+
+engagementsListIdx = 1
+
+
 -- Define the enemy AI behavior
 function EnemyAISimple(time)
+
+
+
     contact = ScenEdit_UnitC()
-    if not (contact==nil) then
-        printMessage("Contact spotted " .. contact.name)
+
+    if contact then
+        -- printMessage("Spotted contact len is " .. #spottedContacts)
+        -- Check if the contact is new
+        local found = false
+        for i, con in ipairs(spottedContacts) do
+            if con.guid==contact.guid then
+                found = true
+                break
+            end
+        end
+
+        if not found then
+            detectedByUnit =  ScenEdit_UnitY ( ).unit 
+            
+            -- detectionUnitDetails = ScenEdit_GetUnit( { guid= detectedByUnit.guid} ) 
+
+            engagementsList[engagementsListIdx]={}
+            engagementsList[engagementsListIdx]['source'] = UnitY()
+            engagementsList[engagementsListIdx]['target'] = UnitX()
+            engagementsList[engagementsListIdx]['contact'] = contact
+            engagementsListIdx = engagementsListIdx + 1
+
+
+            setUnitCourse(detectedByUnit, contact.latitude, contact.longitude)
+
+            -- other = UnitY()
+            -- detectionUnitDetails = ScenEdit_GetUnit( { guid= detectedByUnit.guid} ) 
+            -- print(detectionUnitDetails)
+            printMessage("New Contact spotted " .. contact.name .. " from " .. detectedByUnit.guid )
+            nextEntryIdx = spottedContactsIdx
+            spottedContacts[nextEntryIdx] = contact
+            spottedContactsIdx = spottedContactsIdx + 1
+
+            local friendly = VP_GetSide( { Side ='Friendly' } ) 
+            local enemy = VP_GetSide( { Side ='Enemy' } ) 
+
+
+            if contact.detectedBySide.guid == friendly.guid then
+                printMessage("Detected enemy with name " .. contact.name)
+            else
+                printMessage("Enemy detectedt friendly unit " .. contact.name)
+            end
+
+
+        end
+
+    else
+        printMessage("Normal mode")
     end
+
+    -- Update Engagements List Target Path Planning
+    for i, entry in ipairs(engagementsList) do
+
+          --print(entry.source.unit.guid)
+          --print(contact.guid)
+          --print(entry.target.guid)
+
+        -- printMessage("Readjusting path planning for " .. entry.unit.guid .. " to " .. entry.contact.guid)
+        setUnitCourse(entry.source.unit, entry.contact.latitude, entry.contact.longitude)
+    end
+
+
 end
 
  
@@ -1183,6 +1297,8 @@ end
 
 -- setup()
 setupSimple()
+
+
 
 -- ai_vs_ai()
 
