@@ -318,6 +318,15 @@ function removeEvents()
     end
 end
 
+function WeaponFired(target, weapon)
+printMessage('Missile fired')
+--print(target)
+--print(Weapon)
+--local Message = "Missile "..weapon.name.. " fired at " .. target.name 
+--ScenEdit_MsgBox(Message, 1)
+return {true,"okay"} 
+end
+
 
 
 function setupSimple()
@@ -395,10 +404,15 @@ end
 
 
 function setUnitCourse(unit, latitude, longitude)
-  ScenEdit_SetUnit({side=unit.side, 
-                   name=unit.guid, 
-                   course={{longitude=longitude, latitude=latitude}}, 
-                   TypeOf='ManualPlottedCourseWaypoint'})
+  -- print(unit)
+  if unit then
+      ScenEdit_SetUnit({side=unit.side, 
+                       name=unit.guid, 
+                       course={{longitude=longitude, latitude=latitude}}, 
+                       TypeOf='ManualPlottedCourseWaypoint'})
+    else
+    print("Error, unit not set")
+  end
 end
 
 function manualAttackContact(attacker_id, contact_id, weapon_id, qty, mount_id) --mount_id nil
@@ -421,22 +435,141 @@ function auto_refuel(side, unit_name)
   ScenEdit_RefuelUnit({side=side, unitname=unit_name})
 end
 
--- ----------------------------------------
--- Global Variables for Rule Based Opponent
--- ----------------------------------------
 
-if not spottedContacts then
-    spottedContacts = {}
+
+
+function isNewContact(contact)
+  local found = false
+  for i=1,#spottedContacts do      
+      if spottedContacts[i] and spottedContacts[i].guid==contact.guid then
+          found = true
+          break
+      end
+  end
+  if not found then
+    return true
+  else
+    return false
+  end
 end
 
-spottedContactsIdx = 1
-
-if not engagementsList then
-    engagementsList = {}
+function isEngaged(contact)
+  found = false
+  for i=1,#engagementsList do
+    if engagementsList[i] and engagementsList[i].contact.guid == contact.guid then
+      return true
+    end
+  end
+  return false
 end
 
-engagementsListIdx = 1
 
+function getDetectionUnitOfContact(contact)
+  if contact.lastDetections then
+    -- Find out which aircraft has most recently seen the contact
+    local minimumAge=0
+    local minimumAgeGuid = ''
+    local foundMinimum = false
+
+    for i, detection in ipairs(contact.lastDetections) do
+      if #minimumAgeGuid==0 or minimumAge>detection.age then
+        minimumAge = detection.age
+        minimumAgeGuid = detection.detector_guid
+        foundMinimum = true
+      end
+    end
+
+    if foundMinimum==true then
+      local detectionUnit = VP_GetUnit( { guid = minimumAgeGuid } )  
+      return detectionUnit
+    end
+  end
+
+  print("Returnning nil")
+  return nil
+end
+
+function addContact(contact)
+  printMessage("Adding contact")
+  nextEntryIdx = spottedContactsIdx
+  spottedContacts[nextEntryIdx] = contact
+  spottedContactsIdx = spottedContactsIdx + 1
+end
+
+function geo_distance(lat1, lon1, lat2, lon2)
+  if lat1 == nil or lon1 == nil or lat2 == nil or lon2 == nil then
+    return nil
+  end
+
+  local dlat = math.rad(lat2-lat1)
+  local dlon = math.rad(lon2-lon1)
+  local sin_dlat = math.sin(dlat/2)
+  local sin_dlon = math.sin(dlon/2)
+  local a = sin_dlat * sin_dlat + math.cos(math.rad(lat1)) * math.cos(math.rad(lat2)) * sin_dlon * sin_dlon
+  local c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+  -- 6378 km is the earth's radius at the equator.
+  -- 6357 km would be the radius at the poles (earth isn't a perfect circle).
+  -- Thus, high latitude distances will be slightly overestimated
+  -- To get miles, use 3963 as the constant (equator again)
+  local d = 6378 * c
+  return d
+end
+
+
+function engageContacts(side)
+  --print(side.contacts)
+
+  local contacts = side.contacts 
+  for i, cont in ipairs(contacts) do
+    local contactDetails = VP_GetContact( { guid = cont.guid  } )
+
+    if isNewContact(contactDetails) then
+      -- printMessage("Contact is new")
+      detectionUnit = getDetectionUnitOfContact(contactDetails)
+
+      --[[
+      if contactDetails.lastDetections then
+        printMessage("Last Detection is set")
+      else
+        printMessage("Last Detection is not set")
+      end
+
+      if (isEngaged(cont)==false) then
+        printMessage("Is not already engaged")
+      else
+        printMessage("Is already engaged")
+      end
+
+
+      if detectionUnit then
+        printMessage("Detection Unit ok")
+      else
+        printMessage("Detection unit is nil")
+      end
+      ]]--
+      -- print(detectionUnit)
+      
+      
+      -- Check that sides of detection unit and detected unit are different
+      local targetUnit = VP_GetUnit( { guid = contact.actualunitid } ) 
+      local sidesDifferent=false
+  
+      if not (detectionUnit.side==targetUnit.side) then
+        sidesDifferent=true
+      end
+
+      if contactDetails.lastDetections and (isEngaged(cont)==false) and detectionUnit and sidesDifferent then
+            -- printMessage("Adding to engagement list")
+            engagementsList[engagementsListIdx]={}
+            engagementsList[engagementsListIdx]['source'] = detectionUnit
+            engagementsList[engagementsListIdx]['target'] = target
+            engagementsList[engagementsListIdx]['contact'] = contact
+            engagementsListIdx = engagementsListIdx + 1
+            setUnitCourse(detectionUnit, contactDetails.latitude, contactDetails.longitude)
+      end
+    end
+  end
+end
 
 -- Define the enemy AI behavior
 function EnemyAISimple(time)
@@ -446,64 +579,69 @@ function EnemyAISimple(time)
     contact = ScenEdit_UnitC()
 
     if contact then
-        -- printMessage("Spotted contact len is " .. #spottedContacts)
         -- Check if the contact is new
-        local found = false
-        for i, con in ipairs(spottedContacts) do
-            if con.guid==contact.guid then
-                found = true
-                break
-            end
-        end
-
-        if not found then
+        if isNewContact(contact)==true then
             detectedByUnit =  ScenEdit_UnitY ( ).unit 
-            
-            -- detectionUnitDetails = ScenEdit_GetUnit( { guid= detectedByUnit.guid} ) 
 
-            engagementsList[engagementsListIdx]={}
-            engagementsList[engagementsListIdx]['source'] = UnitY()
-            engagementsList[engagementsListIdx]['target'] = UnitX()
-            engagementsList[engagementsListIdx]['contact'] = contact
-            engagementsListIdx = engagementsListIdx + 1
-
-
-            setUnitCourse(detectedByUnit, contact.latitude, contact.longitude)
-
-            -- other = UnitY()
-            -- detectionUnitDetails = ScenEdit_GetUnit( { guid= detectedByUnit.guid} ) 
-            -- print(detectionUnitDetails)
-            printMessage("New Contact spotted " .. contact.name .. " from " .. detectedByUnit.guid )
-            nextEntryIdx = spottedContactsIdx
-            spottedContacts[nextEntryIdx] = contact
-            spottedContactsIdx = spottedContactsIdx + 1
+            -- printMessage("New Contact spotted " .. contact.name .. " from " .. detectedByUnit.guid )
 
             local friendly = VP_GetSide( { Side ='Friendly' } ) 
             local enemy = VP_GetSide( { Side ='Enemy' } ) 
 
-
+            --[[
             if contact.detectedBySide.guid == friendly.guid then
                 printMessage("Detected enemy with name " .. contact.name)
             else
                 printMessage("Enemy detectedt friendly unit " .. contact.name)
             end
+          ]]--
 
 
         end
 
     else
-        printMessage("Normal mode")
+        -- printMessage("Normal mode")
     end
 
+
+    -- As UnitX() and UnitY() are only working on the current set side and as it is not possible in the Script to change the side
+    -- we need a workaround to also engage detected aircrafts as an opponent
+    local friendly = VP_GetSide( { Side ='Friendly' } ) 
+    local enemy = VP_GetSide( { Side ='Enemy' } ) 
+
+    engageContacts(friendly)
+    engageContacts(enemy)
+
     -- Update Engagements List Target Path Planning
+    -- print(engagementsList)
+
     for i, entry in ipairs(engagementsList) do
 
           --print(entry.source.unit.guid)
           --print(contact.guid)
           --print(entry.target.guid)
 
-        -- printMessage("Readjusting path planning for " .. entry.unit.guid .. " to " .. entry.contact.guid)
-        setUnitCourse(entry.source.unit, entry.contact.latitude, entry.contact.longitude)
+        setUnitCourse(entry.source, entry.contact.latitude, entry.contact.longitude)
+    end
+
+
+    -- Check for target distances, engage if possible
+    for i, entry in ipairs(engagementsList) do
+        local result = manualAttackContact(entry.source.guid, entry.contact.guid, 718, 1) 
+        --[[
+        if result==false then
+            printMessage("Manual attacking contact failed")
+        else
+            printMessage("Manual attacking contact success")
+        end
+        ]]--
+
+    end
+
+
+    if isNewContact(contact) and isEngaged(contact) then
+      -- print("Adding contact " .. contact.guid)
+      addContact(contact)
     end
 
 
@@ -1119,6 +1257,57 @@ function finalize()
 end
 
 
+function writeAllGlobals()	
+	local file = io.open("out.txt", "w+")
+
+    local seen={}
+    local function dump(t,i)
+        seen[t]=true
+        local s={}
+        local n=0
+        for k, v in pairs(t) do
+            n=n+1
+			s[n]=tostring(k)
+        end
+        table.sort(s)
+        for k,v in ipairs(s) do
+            file:write(i .. v .. "\n")
+            v=t[v]
+            if type(v)=="table" and not seen[v] then
+                dump(v,i.."\t")
+            end
+        end
+    end
+
+    dump(_G,"")
+	file:close()
+end
+
+function printAllGlobals()
+	local seen={}
+	local function dump(t,i)
+		seen[t]=true
+		local s={}
+		local n=0
+		for k, v in pairs(t) do
+			n=n+1
+			s[n]=tostring(k)
+		end
+		table.sort(s)
+		for k,v in ipairs(s) do
+			print(i .. v)
+			v=t[v]
+			if type(v)=="table" and not seen[v] then
+				dump(v,i.."\t")
+			end
+		end
+	end
+
+	dump(_G,"")
+end
+
+
+
 function debugFields(obj)
     -- First Boolean declares if a value can be set
     -- Second Boolean declares if a value can be read
@@ -1294,10 +1483,74 @@ function addMissions()
 
 end
 
+function live()
+--if not spottedContacts then
+  spottedContacts = {}
+  spottedContactsIdx = 1
+  print("Resetting")
+--end
+
+
+--if not engagementsList then
+  engagementsList = {}
+  engagementsListIdx = 1
+--  print("Resetting")
+
+--end
+
+end
 
 -- setup()
+
+
+-- ----------------------------------------
+-- Global Variables for Rule Based Opponent
+-- ----------------------------------------
+
+--if not spottedContacts then
+-- --[[
+spottedContacts = {}
+spottedContactsIdx = 1
+print("Resetting")
+--end
+
+
+--if not engagementsList then
+engagementsList = {}
+engagementsListIdx = 1
+-- --]]
+
+--end
+
+
+
 setupSimple()
 
+
+--local friendly = VP_GetSide( { Side ='Friendly' } ) 
+--local enemy = VP_GetSide( { Side ='Enemy' } ) 
+
+--aircraftsFriendly = getAircrafts(friendly.units)
+--aircraftsEnemy = getAircrafts(enemy.units)
+--print(aircraftsEnemy)
+
+
+-- EnemyAISimple(0)
+
+-- print(spottedContacts)
+--spottedContacts = {}
+--spottedContactsIdx = 1
+
+--engagementsList = {}
+--engagementsListIdx = 1
+
+-- EnemyAISimple(0)
+--print(engagementsList)
+
+--local sides = VP_GetSides()
+--local contacts = sides[1].contacts 
+--local contactDetails = VP_GetContact( { guid = contacts[1].guid } )
+--print(contactDetails.lastDetections)
 
 
 -- ai_vs_ai()
